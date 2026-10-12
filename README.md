@@ -102,6 +102,8 @@ jobs:
           max-cost-ratio: "1.5"
 ```
 
+Pin the action to a release tag, or to a commit SHA if your organisation requires it.
+
 A golden task is a prompt and checks on the answer ([examples/golden.yaml](examples/golden.yaml)):
 
 ```yaml
