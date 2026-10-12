@@ -1,0 +1,6 @@
+# Dollars per million tokens, for the cost-per-task line. A model with no entry is
+# reported as unpriced. The stub entries make the offline demo show a cost difference.
+models:
+  stub/baseline:  { input: 1.0, output: 5.0 }
+  stub/regressed: { input: 1.0, output: 5.0 }
+  stub/costly:    { input: 1.5, output: 7.5 }

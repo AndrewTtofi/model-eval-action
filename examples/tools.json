@@ -1,0 +1,14 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "lookup_case",
+      "description": "Look up a case in the case-management system by its id. Returns its status and owning team.",
+      "parameters": {
+        "type": "object",
+        "properties": { "case_id": { "type": "string", "description": "The case id, e.g. C-1001" } },
+        "required": ["case_id"]
+      }
+    }
+  }
+]
