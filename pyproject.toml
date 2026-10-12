@@ -1,0 +1,23 @@
+[project]
+name = "model-eval-action"
+version = "0.1.0"
+description = "A GitHub Action that gates a model change on golden tasks: quality, tool use, cost and latency against the model in use today."
+requires-python = ">=3.12"
+license = "MIT"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]  # asserts, and made-up secrets, are the point of a test
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
