@@ -1,0 +1,170 @@
+name: Model eval gate
+description: >-
+  Gate a model change on golden tasks. Runs each task on the model in use today and on a
+  candidate, checks the real text and tool calls, and comments on the pull request with
+  quality, tool use, cost per task and latency. Fails on a regression.
+author: Andreas Ttofi
+branding: { icon: check-circle, color: green }
+
+inputs:
+  golden:
+    description: Path to the golden tasks (YAML), in the calling repository.
+    required: true
+  current:
+    description: The model in use today.
+    required: true
+  candidate:
+    description: The model being considered.
+    required: true
+  base-url:
+    description: An OpenAI-compatible API, up to and including /v1. Not needed when offline.
+    required: false
+    default: ""
+  api-key:
+    description: The API key for base-url. Pass a secret; it reaches the tool through the environment only.
+    required: false
+    default: ""
+  tools:
+    description: Path to the tool definitions to offer the models (an OpenAI-format JSON list).
+    required: false
+    default: ""
+  prices:
+    description: "Path to a YAML file: model → input and output dollars per million tokens. Without it, cost is reported as unpriced."
+    required: false
+    default: ""
+  headers:
+    description: "Extra request headers, one 'Name: value' per line (for example a data class for a governed gateway)."
+    required: false
+    default: ""
+  runs:
+    description: Repeats per task. A task passes only if every run passes.
+    required: false
+    default: "1"
+  max-cost-ratio:
+    description: Fail if the candidate costs more than this many times the current model per task. Empty for no limit.
+    required: false
+    default: ""
+  max-latency-ratio:
+    description: Fail if the candidate's median latency is more than this many times the current model's. Empty for no limit.
+    required: false
+    default: ""
+  offline:
+    description: "'true' replaces the models with deterministic stubs (stub/baseline, stub/regressed, stub/costly): checks the golden file and the wiring with no key and no spend."
+    required: false
+    default: "false"
+  comment:
+    description: "'true' posts the report on the pull request, updating its earlier comment. Needs `pull-requests: write`."
+    required: false
+    default: "true"
+  fail-on:
+    description: "'regression' fails the job on a regression or a budget breach (and on a comparison that could not be made). 'never' only reports."
+    required: false
+    default: regression
+  github-token:
+    description: The token used to comment.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  verdict:
+    description: pass, regression, over budget, or inconclusive.
+    value: ${{ steps.eval.outputs.verdict }}
+  regressions:
+    description: How many tasks regressed.
+    value: ${{ steps.eval.outputs.regressions }}
+  report:
+    description: Path to the Markdown report.
+    value: ${{ steps.eval.outputs.report }}
+  json:
+    description: Path to the report as JSON.
+    value: ${{ steps.eval.outputs.json }}
+
+runs:
+  using: composite
+  steps:
+    # GitHub-owned, pinned to a commit.
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with: { python-version: "3.12" }
+
+    - name: Install
+      shell: bash
+      run: python -m pip install --quiet --disable-pip-version-check --require-hashes -r "$GITHUB_ACTION_PATH/requirements.txt"
+
+    # Every input reaches the script through the environment, never by being pasted into
+    # the script text: an input is data, and must not be able to become a command.
+    - name: Evaluate
+      id: eval
+      shell: bash
+      env:
+        EVAL_API_KEY: ${{ inputs.api-key }}
+        IN_GOLDEN: ${{ inputs.golden }}
+        IN_CURRENT: ${{ inputs.current }}
+        IN_CANDIDATE: ${{ inputs.candidate }}
+        IN_BASE_URL: ${{ inputs.base-url }}
+        IN_TOOLS: ${{ inputs.tools }}
+        IN_PRICES: ${{ inputs.prices }}
+        IN_HEADERS: ${{ inputs.headers }}
+        IN_RUNS: ${{ inputs.runs }}
+        IN_MAX_COST: ${{ inputs.max-cost-ratio }}
+        IN_MAX_LATENCY: ${{ inputs.max-latency-ratio }}
+        IN_OFFLINE: ${{ inputs.offline }}
+        IN_FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        report="$RUNNER_TEMP/eval-report.md"; data="$RUNNER_TEMP/eval-report.json"
+        args=(--golden "$IN_GOLDEN" --current "$IN_CURRENT" --candidate "$IN_CANDIDATE"
+              --runs "$IN_RUNS" --markdown "$report" --json "$data")
+        [ -n "$IN_BASE_URL" ] && args+=(--base-url "$IN_BASE_URL")
+        [ -n "$IN_TOOLS" ] && args+=(--tools "$IN_TOOLS")
+        [ -n "$IN_PRICES" ] && args+=(--prices "$IN_PRICES")
+        [ -n "$IN_MAX_COST" ] && args+=(--max-cost-ratio "$IN_MAX_COST")
+        [ -n "$IN_MAX_LATENCY" ] && args+=(--max-latency-ratio "$IN_MAX_LATENCY")
+        [ "$IN_OFFLINE" = "true" ] && args+=(--offline)
+        while IFS= read -r header; do [ -n "$header" ] && args+=(--header "$header"); done <<< "$IN_HEADERS"
+
+        set +e
+        PYTHONPATH="$GITHUB_ACTION_PATH" python -m evalgate "${args[@]}" > /dev/null
+        code=$?
+        set -e
+
+        if [ -f "$report" ]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+        if [ -f "$data" ]; then
+          verdict="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["verdict"])' "$data")"
+          regressions="$(python -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["regressions"]))' "$data")"
+        else
+          verdict="inconclusive"; regressions="0"
+        fi
+        {
+          echo "verdict=$verdict"; echo "regressions=$regressions"
+          echo "report=$report"; echo "json=$data"; echo "code=$code"
+        } >> "$GITHUB_OUTPUT"
+        echo "verdict: $verdict ($regressions regression(s))"
+
+    - name: Comment on the pull request
+      if: inputs.comment == 'true' && github.event_name == 'pull_request' && steps.eval.outputs.report != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPORT: ${{ steps.eval.outputs.report }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        [ -f "$REPORT" ] || exit 0
+        # Update this action's earlier comment if there is one, so a pull request shows
+        # the latest result once and not a history of them.
+        existing="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+          --jq '[.[] | select(.body | startswith("<!-- model-eval-action -->"))][0].id // empty')"
+        if [ -n "$existing" ]; then
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -F body=@"$REPORT" > /dev/null
+        else
+          gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$REPORT" > /dev/null
+        fi
+
+    - name: Decide
+      shell: bash
+      env:
+        CODE: ${{ steps.eval.outputs.code }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        VERDICT: ${{ steps.eval.outputs.verdict }}
+      run: |
+        if [ "$FAIL_ON" = "never" ] || [ "$CODE" = "0" ]; then exit 0; fi
+        echo "::error::model eval: $VERDICT"
+        exit "$CODE"
