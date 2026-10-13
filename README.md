@@ -145,6 +145,7 @@ tasks:
 | `offline` | `false` | Deterministic stubs instead of models: no key, no spend |
 | `comment` | `true` | Post the report on the pull request, updating the earlier comment |
 | `fail-on` | `regression` | `never` only reports |
+| `github-token` | the workflow's token | Used only to post the comment |
 
 ### Outputs
 
