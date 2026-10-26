@@ -3,5 +3,5 @@ mypy==2.4.0
 pip-audit==2.10.1
 pip-tools==7.6.2
 pytest==9.1.1
-ruff==0.17.0
+ruff==0.17.1
 types-PyYAML==6.0.12.20260906
